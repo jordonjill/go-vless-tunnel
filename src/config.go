@@ -61,7 +61,7 @@ func loadConfig() (*Config, error) {
 		return nil, err
 	}
 
-	port, err := getEnvVariable("PORT", isValidPort, "3000")
+	port, err := getEnvVariable("PORT", isValidPort, "3182")
 	if err != nil {
 		return nil, err
 	}

@@ -36,7 +36,7 @@ A Dockerized VLESS proxy server written in Go, integrated with Cloudflare Tunnel
 
 3. **Configure a Public Hostname**
    - Open the tunnel's **Configure** page and select the **Public Hostname** tab.
-   - Click **Add a public hostname**, enter your domain (e.g. `tunnel.yourdomain.com`), set the service type to **HTTP**, and set the URL to `http://localhost:3000` (or whatever `PORT` you configure).
+   - Click **Add a public hostname**, enter your domain (e.g. `tunnel.yourdomain.com`), set the service type to **HTTP**, and set the URL to `http://localhost:3182` (or whatever `PORT` you configure).
 
 4. **Save the values you will need**
    - Tunnel Token — used by `cloudflared` to authenticate.
@@ -60,7 +60,7 @@ TUNNEL_DOMAIN=tunnel.yourdomain.com
 TUNNEL_TOKEN=your_cloudflare_tunnel_token
 
 # Optional (defaults shown)
-PORT=3000
+PORT=3182
 NAME=my-server
 VLESS_PATH_PREFIX=/work-tunnel-
 ```
@@ -92,7 +92,7 @@ docker run -d \
 | `UUID` | Yes | — | VLESS UUID (standard hyphenated format) |
 | `TUNNEL_DOMAIN` | Yes | — | Public hostname configured in Cloudflare Tunnel |
 | `TUNNEL_TOKEN` | Yes | — | Cloudflare Tunnel authentication token |
-| `PORT` | No | `3000` | Port the Go server listens on inside the container |
+| `PORT` | No | `3182` | Port the Go server listens on inside the container |
 | `NAME` | No | hostname | Label embedded in the VLESS path |
 | `VLESS_PATH_PREFIX` | No | `/work-tunnel-` | WebSocket path prefix used in the VLESS URL |
 
