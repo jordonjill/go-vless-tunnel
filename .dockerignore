@@ -1,0 +1,39 @@
+# Git-related
+.git
+.gitignore
+.github
+
+# Environment configuration
+.env
+.env.*
+!.env.sample
+
+# Editor configuration
+.vscode
+.idea
+*.swp
+*.swo
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+
+# Test files
+__tests__
+test
+tests
+*.test.js
+*.spec.js
+
+# Documentation
+README.md
+LICENSE
+*.md
+
+# Docker-related
+Dockerfile
+.dockerignore
+docker-compose*.yml 
