@@ -1,11 +1,12 @@
-# Work Tunnel VLESS
+# Go VLESS Tunnel
 
-A Dockerized VLESS proxy server written in Go, integrated with Cloudflare Tunnel — a simple, secure, one-command deployment for developers.
+A Dockerized VLESS proxy server written in Go, integrated with Cloudflare Tunnel for simple and secure deployment.
 
 ## Features
 
 - VLESS protocol over WebSocket
 - Automatic validation of UUID, port, and domain format
+- WebSocket upgrade is accepted only on the configured VLESS path
 - Fully environment-variable driven configuration
 - Multi-stage Docker build (Go builder + Alpine runtime)
 - Cloudflare Tunnel handles TLS termination — no certificate management required
@@ -105,6 +106,20 @@ https://<TUNNEL_DOMAIN>/<UUID>
 
 The server returns a ready-to-use VLESS connection string that you can paste directly into your proxy client.
 
+The generated URL includes a WebSocket path derived from:
+
+```
+<VLESS_PATH_PREFIX><NAME>
+```
+
+Example (with defaults):
+
+```
+/work-tunnel-my-server
+```
+
+Only this path accepts WebSocket upgrade requests.
+
 ## Project Structure
 
 ```
@@ -116,7 +131,8 @@ The server returns a ready-to-use VLESS connection string that you can paste dir
     ├── main.go         # HTTP server and VLESS URL generation
     ├── config.go       # Environment variable loading and validation
     ├── wshandler.go    # WebSocket / VLESS protocol handler
-    └── go.mod          # Go module definition
+      ├── go.mod          # Go module definition
+      └── go.sum          # Module checksum file
 ```
 
 ## Notes

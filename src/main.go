@@ -20,6 +20,14 @@ func generateVlessURL(uuid, domain, name, pathPrefix string) string {
 	)
 }
 
+func buildWSPath(pathPrefix, name string) string {
+	path := pathPrefix + name
+	if !strings.HasPrefix(path, "/") {
+		return "/" + path
+	}
+	return path
+}
+
 func main() {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -30,9 +38,16 @@ func main() {
 	uuidHex := strings.ReplaceAll(cfg.UUID, "-", "")
 	wsHandler := setupWebSocketHandler(uuidHex)
 
+	wsPath := buildWSPath(cfg.VlessPathPrefix, cfg.Name)
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Upgrade WebSocket connections regardless of path.
 		if websocket.IsWebSocketUpgrade(r) {
+			if r.URL.Path != wsPath {
+				w.Header().Set("Content-Type", "text/plain")
+				w.WriteHeader(http.StatusNotFound)
+				fmt.Fprintln(w, "Not Found")
+				return
+			}
 			wsHandler(w, r)
 			return
 		}

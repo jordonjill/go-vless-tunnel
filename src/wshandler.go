@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -26,13 +27,6 @@ const (
 	retryDelay        = 1 * time.Second
 )
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  4096,
-	WriteBufferSize: 4096,
-	// Accept connections from any origin (same behaviour as the JS ws library).
-	CheckOrigin: func(r *http.Request) bool { return true },
-}
-
 var successResponse = []byte{0x00, 0x00}
 
 // setupWebSocketHandler returns an http.HandlerFunc that upgrades HTTP
@@ -42,6 +36,22 @@ func setupWebSocketHandler(uuidHex string) http.HandlerFunc {
 	uuidBytes, err := hex.DecodeString(uuidHex)
 	if err != nil {
 		log.Fatalf("[FATAL] Invalid UUID hex: %v", err)
+	}
+
+	upgrader := websocket.Upgrader{
+		ReadBufferSize:  4096,
+		WriteBufferSize: 4096,
+		CheckOrigin: func(r *http.Request) bool {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				return true
+			}
+			u, parseErr := url.Parse(origin)
+			if parseErr != nil {
+				return false
+			}
+			return strings.EqualFold(u.Host, r.Host)
+		},
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -75,8 +85,8 @@ func handleConnection(ws *websocket.Conn, uuidBytes []byte) {
 		return
 	}
 
-	// Minimum header length check: 1(ver)+16(uuid)+1(addonLen)+1(cmd)+2(port)+1(atyp)+4(ipv4) = 26
-	if len(msg) < 26 {
+	// Minimum bytes before address payload is parsed by parseHost.
+	if len(msg) < 22 {
 		log.Printf("[WARN] Message too short: %d bytes", len(msg))
 		return
 	}
@@ -92,6 +102,11 @@ func handleConnection(ws *websocket.Conn, uuidBytes []byte) {
 	// ─────────────────────────────────────────────────────────────
 
 	// Validate UUID (bytes 1-16).
+	if msg[0] != 0x00 {
+		log.Printf("[WARN] Unsupported VLESS version: %d", msg[0])
+		return
+	}
+
 	for i, b := range uuidBytes {
 		if msg[1+i] != b {
 			log.Printf("[WARN] Invalid UUID connection")
@@ -129,20 +144,16 @@ func handleConnection(ws *websocket.Conn, uuidBytes []byte) {
 
 	payload := msg[endIndex:]
 
-	// Send VLESS success response before proxying.
-	if writeErr := ws.WriteMessage(websocket.BinaryMessage, successResponse); writeErr != nil {
-		log.Printf("[ERROR] Failed to send success response: %v", writeErr)
-		return
-	}
-
 	target := fmt.Sprintf("%s:%d", host, port)
-	connectWithRetry(ws, target, payload)
+	if connErr := connectWithRetry(ws, target, payload); connErr != nil {
+		log.Printf("[ERROR] Connection handling failed: %v", connErr)
+	}
 }
 
 // connectWithRetry dials the TCP target (retrying up to maxRetries times on
 // failure) and then bidirectionally proxies data between the WebSocket and the
 // TCP connection.
-func connectWithRetry(ws *websocket.Conn, target string, payload []byte) {
+func connectWithRetry(ws *websocket.Conn, target string, payload []byte) error {
 	var tcpConn net.Conn
 	var err error
 
@@ -160,7 +171,7 @@ func connectWithRetry(ws *websocket.Conn, target string, payload []byte) {
 
 	if err != nil {
 		log.Printf("[ERROR] Max retries reached, unable to connect: %s", target)
-		return
+		return err
 	}
 	defer tcpConn.Close()
 
@@ -175,8 +186,13 @@ func connectWithRetry(ws *websocket.Conn, target string, payload []byte) {
 	if len(payload) > 0 {
 		if _, wErr := tcpConn.Write(payload); wErr != nil {
 			log.Printf("[ERROR] Failed to send initial payload: %v", wErr)
-			return
+			return wErr
 		}
+	}
+
+	if writeErr := ws.WriteMessage(websocket.BinaryMessage, successResponse); writeErr != nil {
+		log.Printf("[ERROR] Failed to send success response: %v", writeErr)
+		return writeErr
 	}
 
 	wsStream := &wsBinaryStream{ws: ws}
@@ -215,6 +231,7 @@ func connectWithRetry(ws *websocket.Conn, target string, payload []byte) {
 	<-ctx.Done()
 	closeBoth()
 	wg.Wait()
+	return nil
 }
 
 type wsBinaryStream struct {
