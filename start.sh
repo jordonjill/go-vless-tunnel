@@ -11,6 +11,8 @@ cloudflared_pid=$!
 
 cleanup() {
 	kill "$server_pid" "$cloudflared_pid" 2>/dev/null || true
+	wait "$server_pid" "$cloudflared_pid" 2>/dev/null || true
+	exit 0
 }
 
 trap cleanup INT TERM
