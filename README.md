@@ -22,25 +22,24 @@ A Dockerized VLESS proxy server written in Go, integrated with Cloudflare Tunnel
 
 ## Requirements
 
-- [Docker](https://docs.docker.com/get-docker/) (with Compose plugin or `docker-compose`)
-- A Cloudflare account with Zero Trust enabled and a Tunnel Token
+- [Docker](https://docs.docker.com/get-docker/) with the Compose plugin (`docker compose`). Runs on amd64, arm64, arm and 386 hosts; non-amd64 builds need BuildKit, the default builder since Docker 23.
+- A Cloudflare account with your domain added to it
 
-## Cloudflare Zero Trust Tunnel Setup
+## Cloudflare Tunnel Setup
 
-1. **Log in to the Cloudflare Zero Trust dashboard**
-   - Go to <https://dash.cloudflare.com/> and select **Zero Trust**.
+1. **Create a tunnel**
+   - In the [Cloudflare dashboard](https://dash.cloudflare.com/), go to **Networking → Tunnels** and select **Create a tunnel**.
+   - Enter a name (e.g. `go-vless-tunnel`) and select **Create Tunnel**.
+   - Copy the token from the installation command shown (the long string after `--token`). Don't run that command: the container runs `cloudflared` itself, and the tunnel shows as connected once you start it (see Quick Start).
 
-2. **Create a Tunnel**
-   - In the left sidebar choose **Access → Tunnels**.
-   - Click **Create a tunnel**, enter a name (e.g. `go-vless-tunnel`), select **Docker** as the connector type, and copy the generated **Tunnel Token**.
+2. **Add a published application route**
+   - Open the tunnel and, on the **Routes** tab, select **Add route → Published application**.
+   - Enter a subdomain and pick your domain (e.g. `tunnel.yourdomain.com`).
+   - Set **Service URL** to `http://localhost:3182` (or whatever `PORT` you configure), then select **Add route**.
 
-3. **Configure a Public Hostname**
-   - Open the tunnel's **Configure** page and select the **Public Hostname** tab.
-   - Click **Add a public hostname**, enter your domain (e.g. `tunnel.yourdomain.com`), set the service type to **HTTP**, and set the URL to `http://localhost:3182` (or whatever `PORT` you configure).
-
-4. **Save the values you will need**
-   - Tunnel Token — used by `cloudflared` to authenticate.
-   - Public hostname (domain) — used to build the VLESS URL.
+3. **Save the values you will need**
+   - Tunnel token → `TUNNEL_TOKEN`
+   - Hostname → `TUNNEL_DOMAIN`
 
 ## Quick Start
 
@@ -59,7 +58,7 @@ UUID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 TUNNEL_DOMAIN=tunnel.yourdomain.com
 TUNNEL_TOKEN=your_cloudflare_tunnel_token
 
-# Optional (defaults shown)
+# Optional (defaults shown, except NAME, which defaults to the hostname)
 PORT=3182
 NAME=my-server
 VLESS_PATH_PREFIX=/work-tunnel-
@@ -70,7 +69,7 @@ VLESS_PATH_PREFIX=/work-tunnel-
 The repository ships with a ready-to-use `docker-compose.yml` that builds the image from source:
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 ### 4. Run with plain Docker
@@ -131,8 +130,8 @@ Only this path accepts WebSocket upgrade requests.
     ├── main.go         # HTTP server and VLESS URL generation
     ├── config.go       # Environment variable loading and validation
     ├── wshandler.go    # WebSocket / VLESS protocol handler
-      ├── go.mod          # Go module definition
-      └── go.sum          # Module checksum file
+    ├── go.mod          # Go module definition
+    └── go.sum          # Module checksum file
 ```
 
 ## Notes
