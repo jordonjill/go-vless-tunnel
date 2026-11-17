@@ -22,11 +22,8 @@ Thumbs.db
 *.log
 
 # Test files
-__tests__
 test
 tests
-*.test.js
-*.spec.js
 
 # Documentation
 README.md
