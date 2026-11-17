@@ -5,7 +5,6 @@ import (
 	"os"
 	"regexp"
 	"strconv"
-	"strings"
 )
 
 // Config holds all run-time configuration for the server.
@@ -27,7 +26,7 @@ func isValidUUID(v string) bool {
 }
 
 func isValidPort(v string) bool {
-	p, err := strconv.Atoi(strings.TrimSpace(v))
+	p, err := strconv.Atoi(v)
 	return err == nil && p >= 1 && p <= 65535
 }
 
