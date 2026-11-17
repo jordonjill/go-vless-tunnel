@@ -46,7 +46,7 @@ A Dockerized VLESS proxy server written in Go, integrated with Cloudflare Tunnel
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/playwjj/go-vless-tunnel.git
+git clone https://github.com/jordonjill/go-vless-tunnel.git
 cd go-vless-tunnel
 ```
 
