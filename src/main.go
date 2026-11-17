@@ -11,12 +11,11 @@ import (
 )
 
 // generateVlessURL builds the VLESS connection URI that clients copy into
-// their proxy software, matching the format produced by the JS implementation.
-func generateVlessURL(uuid, domain, name, pathPrefix string) string {
-	path := url.QueryEscape(pathPrefix + name)
+// their proxy software. wsPath must be the path the server actually serves.
+func generateVlessURL(uuid, domain, wsPath string) string {
 	return fmt.Sprintf(
 		"vless://%s@%s:443?encryption=none&security=tls&sni=%s&fp=chrome&type=ws&host=%s&path=%s",
-		uuid, domain, domain, domain, path,
+		uuid, domain, domain, domain, url.QueryEscape(wsPath),
 	)
 }
 
@@ -39,6 +38,7 @@ func main() {
 	wsHandler := setupWebSocketHandler(uuidHex)
 
 	wsPath := buildWSPath(cfg.VlessPathPrefix, cfg.Name)
+	vlessURL := generateVlessURL(cfg.UUID, cfg.TunnelDomain, wsPath)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if websocket.IsWebSocketUpgrade(r) {
@@ -58,7 +58,6 @@ func main() {
 			fmt.Fprintln(w, "Hello world!")
 
 		case "/" + cfg.UUID:
-			vlessURL := generateVlessURL(cfg.UUID, cfg.TunnelDomain, cfg.Name, cfg.VlessPathPrefix)
 			w.Header().Set("Content-Type", "text/plain")
 			fmt.Fprintln(w, vlessURL)
 
