@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"context"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -11,9 +9,9 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
-	"strings"
+	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -22,9 +20,10 @@ import (
 const (
 	connectionTimeout = 30 * time.Second // initial-message deadline
 	tcpDialTimeout    = 5 * time.Second
-	keepAliveInterval = 10 * time.Second
-	maxRetries        = 2
-	retryDelay        = 1 * time.Second
+	// The first message (VLESS header + first payload chunk) is buffered in
+	// memory before the UUID is checked, so cap it. Mainstream clients send
+	// at most ~32 KiB here.
+	maxFirstMessageSize = 64 << 10
 )
 
 var successResponse = []byte{0x00, 0x00}
@@ -38,21 +37,9 @@ func setupWebSocketHandler(uuidHex string) http.HandlerFunc {
 		log.Fatalf("[FATAL] Invalid UUID hex: %v", err)
 	}
 
-	upgrader := websocket.Upgrader{
-		ReadBufferSize:  4096,
-		WriteBufferSize: 4096,
-		CheckOrigin: func(r *http.Request) bool {
-			origin := r.Header.Get("Origin")
-			if origin == "" {
-				return true
-			}
-			u, parseErr := url.Parse(origin)
-			if parseErr != nil {
-				return false
-			}
-			return strings.EqualFold(u.Host, r.Host)
-		},
-	}
+	// The zero value already rejects cross-origin browser requests and reuses
+	// net/http's 4 KiB buffers.
+	upgrader := websocket.Upgrader{}
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, upgradeErr := upgrader.Upgrade(w, r, nil)
@@ -68,7 +55,8 @@ func setupWebSocketHandler(uuidHex string) http.HandlerFunc {
 func handleConnection(ws *websocket.Conn, uuidBytes []byte) {
 	defer ws.Close()
 
-	// Enforce a deadline for the first (header) message.
+	// Enforce a deadline and a size limit for the first (header) message.
+	ws.SetReadLimit(maxFirstMessageSize)
 	_ = ws.SetReadDeadline(time.Now().Add(connectionTimeout))
 
 	msgType, msg, err := ws.ReadMessage()
@@ -77,7 +65,8 @@ func handleConnection(ws *websocket.Conn, uuidBytes []byte) {
 		return
 	}
 
-	// Disable the deadline for subsequent data messages.
+	// Lift both for subsequent data messages, which are streamed.
+	ws.SetReadLimit(0)
 	_ = ws.SetReadDeadline(time.Time{})
 
 	if msgType != websocket.BinaryMessage {
@@ -92,7 +81,7 @@ func handleConnection(ws *websocket.Conn, uuidBytes []byte) {
 	}
 
 	// ── VLESS header layout ──────────────────────────────────────
-	// [0]        version  (ignored, must be 0)
+	// [0]        version  (must be 0)
 	// [1..16]    UUID     (16 bytes)
 	// [17]       M        additional-data length
 	// [18..17+M] additional data (ignored)
@@ -101,12 +90,12 @@ func handleConnection(ws *websocket.Conn, uuidBytes []byte) {
 	// [21+M]     addrType + address bytes
 	// ─────────────────────────────────────────────────────────────
 
-	// Validate UUID (bytes 1-16).
 	if msg[0] != 0x00 {
 		log.Printf("[WARN] Unsupported VLESS version: %d", msg[0])
 		return
 	}
 
+	// Validate UUID (bytes 1-16).
 	for i, b := range uuidBytes {
 		if msg[1+i] != b {
 			log.Printf("[WARN] Invalid UUID connection")
@@ -144,67 +133,39 @@ func handleConnection(ws *websocket.Conn, uuidBytes []byte) {
 
 	payload := msg[endIndex:]
 
-	target := fmt.Sprintf("%s:%d", host, port)
-	if connErr := connectWithRetry(ws, target, payload); connErr != nil {
-		log.Printf("[ERROR] Connection handling failed: %v", connErr)
+	target := net.JoinHostPort(host, strconv.Itoa(int(port)))
+	if relayErr := relay(ws, target, payload); relayErr != nil {
+		log.Printf("[ERROR] Proxy to %s failed: %v", target, relayErr)
 	}
 }
 
-// connectWithRetry dials the TCP target (retrying up to maxRetries times on
-// failure) and then bidirectionally proxies data between the WebSocket and the
-// TCP connection.
-func connectWithRetry(ws *websocket.Conn, target string, payload []byte) error {
-	var tcpConn net.Conn
-	var err error
-
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt > 0 {
-			log.Printf("[INFO] Retrying connection (%d/%d)", attempt, maxRetries)
-			time.Sleep(retryDelay)
-		}
-		tcpConn, err = net.DialTimeout("tcp", target, tcpDialTimeout)
-		if err == nil {
-			break
-		}
-		log.Printf("[ERROR] TCP connection failed (attempt %d): %v", attempt+1, err)
-	}
-
+// relay dials the TCP target and then bidirectionally proxies data between
+// the WebSocket and the TCP connection.
+func relay(ws *websocket.Conn, target string, payload []byte) error {
+	tcpConn, err := net.DialTimeout("tcp", target, tcpDialTimeout)
 	if err != nil {
-		log.Printf("[ERROR] Max retries reached, unable to connect: %s", target)
 		return err
 	}
 	defer tcpConn.Close()
 
-	// Apply TCP tuning options.
-	if tc, ok := tcpConn.(*net.TCPConn); ok {
-		_ = tc.SetKeepAlive(true)
-		_ = tc.SetKeepAlivePeriod(keepAliveInterval)
-		_ = tc.SetNoDelay(true)
-	}
-
 	// Forward the initial payload that arrived with the VLESS header.
 	if len(payload) > 0 {
 		if _, wErr := tcpConn.Write(payload); wErr != nil {
-			log.Printf("[ERROR] Failed to send initial payload: %v", wErr)
-			return wErr
+			return fmt.Errorf("send initial payload: %w", wErr)
 		}
 	}
 
 	if writeErr := ws.WriteMessage(websocket.BinaryMessage, successResponse); writeErr != nil {
-		log.Printf("[ERROR] Failed to send success response: %v", writeErr)
-		return writeErr
+		return fmt.Errorf("send success response: %w", writeErr)
 	}
 
 	wsStream := &wsBinaryStream{ws: ws}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
-	var once sync.Once
+	// Whichever direction ends first closes both sides, which unblocks the other.
+	// Closing twice is harmless.
 	closeBoth := func() {
-		once.Do(func() {
-			_ = wsStream.Close()
-			_ = tcpConn.Close()
-		})
+		_ = ws.Close()
+		_ = tcpConn.Close()
 	}
 
 	var wg sync.WaitGroup
@@ -212,24 +173,20 @@ func connectWithRetry(ws *websocket.Conn, target string, payload []byte) error {
 
 	go func() {
 		defer wg.Done()
-		if _, copyErr := io.Copy(tcpConn, wsStream); copyErr != nil && !isNormalWSClose(copyErr) && !isExpectedProxyClose(copyErr) {
+		if _, copyErr := io.Copy(tcpConn, wsStream); !isExpectedProxyClose(copyErr) {
 			log.Printf("[ERROR] WebSocket -> TCP transfer error: %v", copyErr)
 		}
-		cancel()
 		closeBoth()
 	}()
 
 	go func() {
 		defer wg.Done()
-		if _, copyErr := io.Copy(wsStream, tcpConn); copyErr != nil && !isExpectedProxyClose(copyErr) {
+		if _, copyErr := io.Copy(wsStream, tcpConn); !isExpectedProxyClose(copyErr) {
 			log.Printf("[ERROR] TCP -> WebSocket transfer error: %v", copyErr)
 		}
-		cancel()
 		closeBoth()
 	}()
 
-	<-ctx.Done()
-	closeBoth()
 	wg.Wait()
 	return nil
 }
@@ -265,23 +222,10 @@ func (s *wsBinaryStream) Read(p []byte) (int, error) {
 }
 
 func (s *wsBinaryStream) Write(p []byte) (int, error) {
-	w, err := s.ws.NextWriter(websocket.BinaryMessage)
-	if err != nil {
+	if err := s.ws.WriteMessage(websocket.BinaryMessage, p); err != nil {
 		return 0, err
 	}
-	n, writeErr := w.Write(p)
-	closeErr := w.Close()
-	if writeErr != nil {
-		return n, writeErr
-	}
-	if closeErr != nil {
-		return n, closeErr
-	}
-	return n, nil
-}
-
-func (s *wsBinaryStream) Close() error {
-	return s.ws.Close()
+	return len(p), nil
 }
 
 // parseHost decodes the VLESS address field starting at startIndex.
@@ -327,24 +271,14 @@ func parseHost(msg []byte, startIndex int) (string, int, error) {
 	}
 }
 
-func isNormalWSClose(err error) bool {
-	return websocket.IsCloseError(err,
-		websocket.CloseNormalClosure,
-		websocket.CloseGoingAway,
-	) || strings.Contains(err.Error(), "use of closed network connection")
-}
-
+// isExpectedProxyClose reports whether a copy error just means one side of the
+// session went away, which is routine for a proxy and not worth logging.
 func isExpectedProxyClose(err error) bool {
-	if err == nil {
-		return true
-	}
-	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
-		return true
-	}
-	if closeErr := new(websocket.CloseError); errors.As(err, &closeErr) {
-		return closeErr.Code == websocket.CloseNormalClosure || closeErr.Code == websocket.CloseGoingAway
-	}
-	return strings.Contains(err.Error(), "use of closed network connection") ||
-		strings.Contains(err.Error(), "forcibly closed by the remote host") ||
-		bytes.Contains([]byte(err.Error()), []byte("broken pipe"))
+	var closeErr *websocket.CloseError
+	return err == nil ||
+		errors.As(err, &closeErr) || // any WebSocket close, incl. 1006 when the client just drops
+		errors.Is(err, websocket.ErrCloseSent) ||
+		errors.Is(err, net.ErrClosed) || // we closed it after the other direction ended
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.EPIPE)
 }
